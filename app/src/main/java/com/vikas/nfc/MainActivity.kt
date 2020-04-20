@@ -147,7 +147,7 @@ class MainActivity : Activity() {
                 || NfcAdapter.ACTION_TECH_DISCOVERED == action
                 || NfcAdapter.ACTION_NDEF_DISCOVERED == action) {
             val rawMsgs = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
-
+            //Log.i("NFC", "Size:" + rawMsgs.size);
             if (rawMsgs != null) {
                 Log.i("NFC", "Size:" + rawMsgs.size);
                 val ndefMessages: Array<NdefMessage> = Array(rawMsgs.size, {i -> rawMsgs[i] as NdefMessage});
