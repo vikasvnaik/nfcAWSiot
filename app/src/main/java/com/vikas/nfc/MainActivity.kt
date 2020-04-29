@@ -3,23 +3,34 @@ package com.vikas.nfc
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.Intent
+import android.nfc.NdefMessage
+import android.nfc.NdefRecord
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.MifareClassic
 import android.nfc.tech.MifareUltralight
+import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.provider.Settings.ACTION_NFC_SETTINGS
+import android.util.Log
 import android.view.View
+import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import com.vikas.nfc.utils.Utils
+import com.amazonaws.auth.CognitoCachingCredentialsProvider
+import com.amazonaws.mobileconnectors.iot.AWSIotMqttClientStatusCallback.AWSIotMqttClientStatus
+import com.amazonaws.mobileconnectors.iot.AWSIotMqttManager
+import com.amazonaws.mobileconnectors.iot.AWSIotMqttQos
+import com.amazonaws.regions.Regions
+import com.vikas.nfc.Controller.AWSConnection
 import com.vikas.nfc.parser.NdefMessageParser
-import android.nfc.NdefMessage
-import android.nfc.NdefRecord
-import android.os.Parcelable
-import android.util.Log;
-
-
+import com.vikas.nfc.utils.Utils
+import java.io.UnsupportedEncodingException
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
+import java.util.*
 
 
 class MainActivity : Activity() {
@@ -29,22 +40,106 @@ class MainActivity : Activity() {
     // display the data read
     private var text: TextView? = null
 
+    //AWS connection manager object
+    private var mAWSConnection: AWSConnection? = null
+
+
+    val LOG_TAG = PubSubActivity::class.java.canonicalName
+
+    // --- Constants to modify per your configuration ---
+
+    // --- Constants to modify per your configuration ---
+// Customer specific IoT endpoint
+// AWS Iot CLI describe-endpoint call returns: XXXXXXXXXX.iot.<region>.amazonaws.com,
+    private val CUSTOMER_SPECIFIC_ENDPOINT =
+        "a36zqdn1wgny04.iot.us-west-2.amazonaws.com"
+
+    // Cognito pool ID. For this app, pool needs to be unauthenticated pool with
+// AWS IoT permissions.
+    private val COGNITO_POOL_ID = "us-west-2:68ec09f4-5b7b-43ea-98d3-1c1030207ce0"
+
+    // Region of AWS IoT
+    private val MY_REGION = Regions.US_WEST_2
+
+    var txtSubscribe: EditText? = null
+
+    var tvLastMessage: TextView? = null
+    var tvClientId: TextView? = null
+    var tvStatus: TextView? = null
+    var nfcData: TextView? = null
+
+    var btnConnect: Button? = null
+    var btnSubscribe: Button? = null
+    var btnDisconnect: Button? = null
+
+    var mqttManager: AWSIotMqttManager? = null
+    var clientId: String? = null
+
+    var credentialsProvider: CognitoCachingCredentialsProvider? = null
+    val topic = "aws/things/Testing-device/shadow/update"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        text = findViewById<View>(R.id.text) as TextView
-        nfcAdapter = NfcAdapter.getDefaultAdapter(this)
 
+        /*val aswAcivity = Intent(this,PubSubActivity::class.java)
+        startActivity(aswAcivity)*/
+        nfcData = findViewById<View>(R.id.nfcData) as TextView
+        nfcAdapter = NfcAdapter.getDefaultAdapter(this)
+        //startConnectionAWS();
         if (nfcAdapter == null) {
             Toast.makeText(this, "No NFC", Toast.LENGTH_SHORT).show()
-            finish()
-            return
+            //finish()
+            //return
         }
 
-        pendingIntent = PendingIntent.getActivity(this, 0,
-                Intent(this, this.javaClass)
-                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), 0)
+        pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, this.javaClass)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), 0
+        )
+
+        //AWS PART
+
+        txtSubscribe = findViewById<View>(R.id.txtSubscribe) as EditText
+
+        tvLastMessage = findViewById<View>(R.id.tvLastMessage) as TextView
+        tvClientId = findViewById<View>(R.id.tvClientId) as TextView
+        tvStatus = findViewById<View>(R.id.tvStatus) as TextView
+
+        btnConnect = findViewById<View>(R.id.btnConnect) as Button
+        btnConnect!!.setOnClickListener(connectClick)
+        btnConnect!!.isEnabled = false
+
+        btnSubscribe = findViewById<View>(R.id.btnSubscribe) as Button
+        btnSubscribe!!.setOnClickListener(subscribeClick)
+
+        btnDisconnect = findViewById<View>(R.id.btnDisconnect) as Button
+        btnDisconnect!!.setOnClickListener(disconnectClick)
+
+        // MQTT client IDs are required to be unique per AWS IoT account.
+// This UUID is "practically unique" but does not _guarantee_
+// uniqueness.
+        clientId = UUID.randomUUID().toString()
+        tvClientId!!.text = clientId
+
+        // Initialize the AWS Cognito credentials provider
+        // Initialize the AWS Cognito credentials provider
+        credentialsProvider = CognitoCachingCredentialsProvider(
+            applicationContext,  // context
+            COGNITO_POOL_ID,  // Identity Pool ID
+            MY_REGION // Region
+        )
+
+        // MQTT Client
+        // MQTT Client
+        mqttManager = AWSIotMqttManager(clientId, CUSTOMER_SPECIFIC_ENDPOINT)
+
+        // The following block uses a Cognito credentials provider for authentication with AWS IoT.
+        // The following block uses a Cognito credentials provider for authentication with AWS IoT.
+        Thread(Runnable { runOnUiThread { btnConnect!!.isEnabled = true } }).start()
     }
+
 
     override fun onResume() {
         super.onResume()
@@ -144,13 +239,15 @@ class MainActivity : Activity() {
         val action = intent.action
 
         if (NfcAdapter.ACTION_TAG_DISCOVERED == action
-                || NfcAdapter.ACTION_TECH_DISCOVERED == action
-                || NfcAdapter.ACTION_NDEF_DISCOVERED == action) {
+            || NfcAdapter.ACTION_TECH_DISCOVERED == action
+            || NfcAdapter.ACTION_NDEF_DISCOVERED == action
+        ) {
             val rawMsgs = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
-            //Log.i("NFC", "Size:" + rawMsgs.size);
+            Log.i("NFC", "Size:" + rawMsgs);
             if (rawMsgs != null) {
                 Log.i("NFC", "Size:" + rawMsgs.size);
-                val ndefMessages: Array<NdefMessage> = Array(rawMsgs.size, {i -> rawMsgs[i] as NdefMessage});
+                val ndefMessages: Array<NdefMessage> =
+                    Array(rawMsgs.size, { i -> rawMsgs[i] as NdefMessage });
                 displayNfcMessages(ndefMessages)
             } else {
                 val empty = ByteArray(0)
@@ -179,7 +276,126 @@ class MainActivity : Activity() {
             val str = record.str()
             builder.append(str).append("\n")
         }
-
-        text?.setText(builder.toString())
+        mqttManager!!.publishString(builder.toString(), topic, AWSIotMqttQos.QOS0)
+        nfcData?.setText(builder.toString())
     }
+
+    //AWS PART
+
+    var connectClick =
+        View.OnClickListener {
+            Log.d(PubSubActivity.LOG_TAG, "clientId = $clientId")
+            try {
+                mqttManager!!.connect(
+                    credentialsProvider
+                ) { status, throwable ->
+                    Log.d(
+                        PubSubActivity.LOG_TAG,
+                        "Status = $status"
+                    )
+                    runOnUiThread {
+                        if (status == AWSIotMqttClientStatus.Connecting) {
+                            tvStatus!!.text = "Connecting..."
+                        } else if (status == AWSIotMqttClientStatus.Connected) {
+                            tvStatus!!.text = "Connected"
+                        } else if (status == AWSIotMqttClientStatus.Reconnecting) {
+                            if (throwable != null) {
+                                Log.e(
+                                    PubSubActivity.LOG_TAG,
+                                    "Connection error.",
+                                    throwable
+                                )
+                                throwable.printStackTrace()
+                            }
+                            tvStatus!!.text = "Reconnecting"
+                        } else if (status == AWSIotMqttClientStatus.ConnectionLost) {
+                            if (throwable != null) {
+                                Log.e(
+                                    PubSubActivity.LOG_TAG,
+                                    "Connection error.",
+                                    throwable
+                                )
+                                throwable.printStackTrace()
+                            }
+                            tvStatus!!.text = "Disconnected"
+                        } else {
+                            tvStatus!!.text = "Disconnected"
+                        }
+                    }
+                }
+            } catch (e: java.lang.Exception) {
+                Log.e(PubSubActivity.LOG_TAG, "Connection error.", e)
+                tvStatus!!.text = "Error! " + e.message
+            }
+        }
+
+    var subscribeClick =
+        View.OnClickListener {
+            //final String topic = txtSubscribe.getText().toString();
+            val topic = "aws/things/Testing-device/shadow/update"
+            Log.d(PubSubActivity.LOG_TAG, "topic = $topic")
+            //String payload = "the payload";
+//Log.d(TAG, "Inside publishToServer payload: " + payload);
+
+            try {
+                mqttManager!!.subscribeToTopic(
+                    topic, AWSIotMqttQos.QOS0
+                ) { topic, data ->
+                    runOnUiThread {
+                        try {
+                            var message: String? = null;
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                                message = String(data, StandardCharsets.UTF_8)
+                            } else {
+                                message = String(data, Charset.forName("UTF-8"))
+                            }
+                            Log.d(
+                                PubSubActivity.LOG_TAG,
+                                "Message arrived:"
+                            )
+                            Log.d(
+                                PubSubActivity.LOG_TAG,
+                                "   Topic: $topic"
+                            )
+                            Log.d(
+                                PubSubActivity.LOG_TAG,
+                                " Message: $message"
+                            )
+                            tvLastMessage!!.text = message
+                        } catch (e: UnsupportedEncodingException) {
+                            Log.e(
+                                PubSubActivity.LOG_TAG,
+                                "Message encoding error.",
+                                e
+                            )
+                        }
+                    }
+                }
+            } catch (e: java.lang.Exception) {
+                Log.e(PubSubActivity.LOG_TAG, "Subscription error.", e)
+            }
+        }
+
+    var publishClick =
+        View.OnClickListener {
+            //final String topic = txtTopic.getText().toString();
+            val topic = "aws/things/Testing-device/shadow/update"
+            //val msg: String = txtMessage.getText().toString()
+            try {
+                //mqttManager!!.publishString(msg, topic, AWSIotMqttQos.QOS0)
+            } catch (e: java.lang.Exception) {
+                Log.e(PubSubActivity.LOG_TAG, "Publish error.", e)
+            }
+        }
+
+    var disconnectClick =
+        View.OnClickListener {
+            try {
+                mqttManager!!.disconnect()
+            } catch (e: java.lang.Exception) {
+                Log.e(PubSubActivity.LOG_TAG, "Disconnect error.", e)
+            }
+        }
+
+
 }

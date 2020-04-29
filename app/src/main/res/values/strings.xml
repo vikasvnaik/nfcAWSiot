@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">NFC</string>
+    <string name="try_connect">Retry Connecting...</string>
+    <string name="connected">Connected!</string>
+    <string name="no_internet">Sem conexão de Internet.</string>
+    <string name="please_connect">Por favor, conecte o dispositivo a uma rede válida.</string>
+    <string name="internet_connected">Internet conectada!</string>
 </resources>
