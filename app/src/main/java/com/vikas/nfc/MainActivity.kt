@@ -1,8 +1,10 @@
 package com.vikas.nfc
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.Intent
+import android.location.Location
 import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.NfcAdapter
@@ -24,9 +26,14 @@ import com.amazonaws.mobileconnectors.iot.AWSIotMqttClientStatusCallback.AWSIotM
 import com.amazonaws.mobileconnectors.iot.AWSIotMqttManager
 import com.amazonaws.mobileconnectors.iot.AWSIotMqttQos
 import com.amazonaws.regions.Regions
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.OnCompleteListener
+import com.google.android.material.snackbar.Snackbar
 import com.vikas.nfc.Controller.AWSConnection
 import com.vikas.nfc.parser.NdefMessageParser
 import com.vikas.nfc.utils.Utils
+import org.json.JSONObject
 import java.io.UnsupportedEncodingException
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
@@ -34,6 +41,10 @@ import java.util.*
 
 
 class MainActivity : Activity() {
+
+    private var mFusedLocationClient: FusedLocationProviderClient? = null
+    private var mLastLocation: Location? = null
+
     private var nfcAdapter: NfcAdapter? = null
     // launch our application when a new Tag or Card will be scanned
     private var pendingIntent: PendingIntent? = null
@@ -43,19 +54,14 @@ class MainActivity : Activity() {
     //AWS connection manager object
     private var mAWSConnection: AWSConnection? = null
 
-
     val LOG_TAG = PubSubActivity::class.java.canonicalName
 
-    // --- Constants to modify per your configuration ---
-
-    // --- Constants to modify per your configuration ---
-// Customer specific IoT endpoint
-// AWS Iot CLI describe-endpoint call returns: XXXXXXXXXX.iot.<region>.amazonaws.com,
+    // AWS Iot CLI describe-endpoint call returns: XXXXXXXXXX.iot.<region>.amazonaws.com,
     private val CUSTOMER_SPECIFIC_ENDPOINT =
         "a36zqdn1wgny04.iot.us-west-2.amazonaws.com"
 
     // Cognito pool ID. For this app, pool needs to be unauthenticated pool with
-// AWS IoT permissions.
+    // AWS IoT permissions.
     private val COGNITO_POOL_ID = "us-west-2:68ec09f4-5b7b-43ea-98d3-1c1030207ce0"
 
     // Region of AWS IoT
@@ -84,6 +90,13 @@ class MainActivity : Activity() {
 
         /*val aswAcivity = Intent(this,PubSubActivity::class.java)
         startActivity(aswAcivity)*/
+
+       /* if (!checkPermissions()) {
+            requestPermissions();
+        } else {
+            getLastLocation();
+        }*/
+        mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         nfcData = findViewById<View>(R.id.nfcData) as TextView
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
         //startConnectionAWS();
@@ -172,17 +185,18 @@ class MainActivity : Activity() {
     private fun dumpTagData(tag: Tag): String {
         val sb = StringBuilder()
         val id = tag.getId()
-        sb.append("ID (hex): ").append(Utils.toHex(id)).append('\n')
-        sb.append("ID (reversed hex): ").append(Utils.toReversedHex(id)).append('\n')
-        sb.append("ID (dec): ").append(Utils.toDec(id)).append('\n')
-        sb.append("ID (reversed dec): ").append(Utils.toReversedDec(id)).append('\n')
+        //sb.append("ID (hex): ").append(Utils.toHex(id)).append('\n')
+        //sb.append("ID (reversed hex): ").append(Utils.toReversedHex(id)).append('\n')
+        //sb.append("ID (dec): ").append(Utils.toDec(id)).append('\n')
+        sb.append(Utils.toDec(id)).append('\n')
+        //sb.append("ID (reversed dec): ").append(Utils.toReversedDec(id)).append('\n')
 
         val prefix = "android.nfc.tech."
-        sb.append("Technologies: ")
-        for (tech in tag.getTechList()) {
+        //sb.append("Technologies: ")
+        /*for (tech in tag.getTechList()) {
             sb.append(tech.substring(prefix.length))
             sb.append(", ")
-        }
+        }*/
 
         sb.delete(sb.length - 2, sb.length)
 
@@ -263,6 +277,7 @@ class MainActivity : Activity() {
     }
 
 
+    @SuppressLint("SetTextI18n")
     private fun displayNfcMessages(msgs: Array<NdefMessage>?) {
         if (msgs == null || msgs.isEmpty())
             return
@@ -276,8 +291,54 @@ class MainActivity : Activity() {
             val str = record.str()
             builder.append(str).append("\n")
         }
-        mqttManager!!.publishString(builder.toString(), topic, AWSIotMqttQos.QOS0)
+
+        //val loc = "Location : " +getLastLocation();
+
+        val data = JSONObject()
+        val random =  Random().nextInt(1000);
+        data.put("row",random)
+        val random1 =  Random().nextInt(1000);
+        data.put("pos",random1)
+        val rfidData = JSONObject()
+        rfidData.put("id",builder.toString())
+        data.put("payload",rfidData)
+
+        mqttManager!!.publishString(data.toString(),topic, AWSIotMqttQos.QOS0)
         nfcData?.setText(builder.toString())
+    }
+
+    private fun getLastLocation(): String? {
+        var location: String?= null;
+        mFusedLocationClient?.getLastLocation()
+            ?.addOnCompleteListener(this,
+                OnCompleteListener<Location?> { task ->
+                    if (task.isSuccessful && task.result != null) {
+                        mLastLocation = task.result
+                        location =  mLastLocation?.latitude.toString()  + mLastLocation?.longitude.toString()
+                    } else { //Log.w(TAG, "getLastLocation:exception", task.getException());
+                        //showSnackbar(getString(R.string.no_location_detected));
+                    }
+                })
+        return location;
+    }
+
+    /**
+     * Shows a [Snackbar].
+     *
+     * @param mainTextStringId The id for the string resource for the Snackbar text.
+     * @param actionStringId   The text of the action item.
+     * @param listener         The listener associated with the Snackbar action.
+     */
+    private fun showSnackbar(
+        mainTextStringId: Int, actionStringId: Int,
+        listener: View.OnClickListener
+    ) {
+        Snackbar.make(
+            findViewById(android.R.id.content),
+            getString(mainTextStringId),
+            Snackbar.LENGTH_INDEFINITE
+        )
+            .setAction(getString(actionStringId), listener).show()
     }
 
     //AWS PART
@@ -376,17 +437,6 @@ class MainActivity : Activity() {
             }
         }
 
-    var publishClick =
-        View.OnClickListener {
-            //final String topic = txtTopic.getText().toString();
-            val topic = "aws/things/Testing-device/shadow/update"
-            //val msg: String = txtMessage.getText().toString()
-            try {
-                //mqttManager!!.publishString(msg, topic, AWSIotMqttQos.QOS0)
-            } catch (e: java.lang.Exception) {
-                Log.e(PubSubActivity.LOG_TAG, "Publish error.", e)
-            }
-        }
 
     var disconnectClick =
         View.OnClickListener {
@@ -396,6 +446,8 @@ class MainActivity : Activity() {
                 Log.e(PubSubActivity.LOG_TAG, "Disconnect error.", e)
             }
         }
+
+
 
 
 }
